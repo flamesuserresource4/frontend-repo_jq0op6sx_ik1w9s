@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
+import ProductCard from './components/ProductCard'
+import ProductDetail from './components/ProductDetail'
+import FiltersBar from './components/FiltersBar'
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
-function Header({ onSearch }) {
+function Header({ onSearch, onOpenOrders }) {
   const [q, setQ] = useState('')
   return (
     <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b">
@@ -18,32 +21,14 @@ function Header({ onSearch }) {
           />
           <button onClick={() => onSearch(q)} className="rounded-r-md bg-blue-600 text-white px-4 py-2">Search</button>
         </div>
-        <a href="#" className="text-sm font-medium">Sign In</a>
+        <button onClick={onOpenOrders} className="text-sm font-medium">Orders</button>
       </div>
     </header>
   )
 }
 
-function ProductCard({ p, onAdd }) {
-  return (
-    <div className="group border rounded-lg overflow-hidden bg-white hover:shadow-lg transition">
-      {p.image_url && (
-        <img src={`${p.image_url}?w=400&q=80`} alt={p.title} className="h-48 w-full object-cover" />
-      )}
-      <div className="p-4">
-        <h3 className="font-semibold line-clamp-2 min-h-[3.5rem]">{p.title}</h3>
-        <p className="text-sm text-gray-500 line-clamp-2 min-h-[2.5rem]">{p.description}</p>
-        <div className="mt-3 flex items-center justify-between">
-          <div className="text-lg font-bold">${p.price}</div>
-          <button onClick={() => onAdd(p)} className="bg-blue-600 text-white px-3 py-1.5 rounded-md">Add to Cart</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function CartDrawer({ open, onClose, items, onCheckout, loading }) {
-  const total = useMemo(() => items.reduce((sum, i) => sum + (i.product?.price || 0) * i.quantity, 0), [items])
+  const total = items.reduce((sum, i) => sum + (i.product?.price || 0) * i.quantity, 0)
   return (
     <div className={`fixed inset-0 ${open ? 'pointer-events-auto' : 'pointer-events-none'}`}>
       <div className={`absolute inset-0 bg-black/40 transition-opacity ${open ? 'opacity-100' : 'opacity-0'}`} onClick={onClose} />
@@ -88,6 +73,8 @@ function App() {
   const [cartOpen, setCartOpen] = useState(false)
   const [cartItems, setCartItems] = useState([])
   const [loading, setLoading] = useState(false)
+  const [detailFor, setDetailFor] = useState(null)
+  const [showOrders, setShowOrders] = useState(false)
   const sessionId = useMemo(() => {
     const key = 'session_id'
     let s = localStorage.getItem(key)
@@ -103,8 +90,9 @@ function App() {
     loadCart()
   }, [])
 
-  const loadProducts = async () => {
-    const res = await fetch(`${BACKEND}/products`)
+  const loadProducts = async (params = {}) => {
+    const qs = new URLSearchParams(params)
+    const res = await fetch(`${BACKEND}/products?${qs.toString()}`)
     if (res.ok) {
       const data = await res.json()
       setProducts(data)
@@ -115,9 +103,12 @@ function App() {
     }
   }
 
+  const applyFilters = (f) => {
+    loadProducts(f)
+  }
+
   const search = (q) => {
-    const s = q.toLowerCase()
-    setFiltered(products.filter(p => p.title.toLowerCase().includes(s) || (p.description||'').toLowerCase().includes(s)))
+    applyFilters({ q })
   }
 
   const loadCart = async () => {
@@ -126,18 +117,18 @@ function App() {
       const cart = await res.json()
       const mapped = (cart.items || []).map(it => ({
         ...it,
-        product: products.find(p => p._id === it.product_id || p.id === it.product_id || p.title) || products[0]
+        product: products.find(p => (p.id) === it.product_id) || null
       }))
-      setCartItems(mapped)
+      setCartItems(mapped.filter(m => !!m.product))
     }
   }
 
   const addToCart = async (product) => {
-    const payload = { product_id: product._id || product.id || product.title, quantity: 1, session_id: sessionId }
+    const payload = { product_id: product.id, quantity: 1, session_id: sessionId }
     await fetch(`${BACKEND}/cart/add`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
     setCartOpen(true)
     setCartItems(prev => {
-      const idx = prev.findIndex(i => (i.product?._id||i.product?.id||i.product?.title) === (product._id||product.id||product.title))
+      const idx = prev.findIndex(i => (i.product?.id) === (product.id))
       if (idx >= 0) {
         const copy = [...prev]
         copy[idx] = { ...copy[idx], quantity: copy[idx].quantity + 1 }
@@ -158,12 +149,13 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header onSearch={search} />
+      <Header onSearch={search} onOpenOrders={() => setShowOrders(true)} />
 
-      <div className="max-w-7xl mx-auto px-4 py-6">
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
+        <FiltersBar onApply={applyFilters} />
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
           {filtered.map((p, i) => (
-            <ProductCard key={i} p={p} onAdd={addToCart} />
+            <ProductCard key={p.id || i} p={p} onAdd={addToCart} onOpen={(pp)=> setDetailFor(pp.id)} />
           ))}
         </div>
       </div>
@@ -171,6 +163,51 @@ function App() {
       <button onClick={() => setCartOpen(true)} className="fixed bottom-6 right-6 bg-blue-600 text-white px-4 py-2 rounded-full shadow-lg">Cart ({cartItems.length})</button>
 
       <CartDrawer open={cartOpen} onClose={() => setCartOpen(false)} items={cartItems} onCheckout={checkout} loading={loading} />
+
+      {detailFor && <ProductDetail productId={detailFor} onClose={() => setDetailFor(null)} onAdd={addToCart} />}
+
+      {showOrders && <OrdersModal onClose={() => setShowOrders(false)} />}
+    </div>
+  )
+}
+
+function OrdersModal({ onClose }) {
+  const [orders, setOrders] = useState([])
+  const sessionId = useMemo(() => localStorage.getItem('session_id'), [])
+  useEffect(() => {
+    fetch(`${BACKEND}/orders?session_id=${sessionId}`).then(r=>r.json()).then(setOrders)
+  }, [])
+  return (
+    <div className="fixed inset-0 z-40">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="absolute right-0 top-0 h-full w-full md:w-[700px] bg-white shadow-xl overflow-y-auto">
+        <div className="p-4 border-b flex items-center justify-between">
+          <h2 className="font-bold text-lg">Your Orders</h2>
+          <button onClick={onClose} className="text-sm text-gray-600">Close</button>
+        </div>
+        <div className="p-4 space-y-4">
+          {orders.length===0 && <p className="text-gray-500">No orders yet.</p>}
+          {orders.map(o => (
+            <div key={o.id} className="border rounded p-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs text-gray-500">Order ID</p>
+                  <p className="font-mono text-sm">{o.id}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Status</p>
+                  <p className="font-semibold">{o.status}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Total</p>
+                  <p className="font-semibold">${o.total?.toFixed(2)}</p>
+                </div>
+              </div>
+              <div className="text-sm text-gray-600 mt-2">{o.items?.length} items</div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
